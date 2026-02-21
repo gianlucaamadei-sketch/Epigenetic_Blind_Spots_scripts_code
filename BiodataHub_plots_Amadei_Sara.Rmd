@@ -1,0 +1,609 @@
+---
+title: "BioData Hub - annotazione - UMAPs"
+output: html_document
+date: "2026-01-29"
+---
+
+```{r}
+library(Seurat)
+library(Matrix)
+library(future)
+library(future.apply)
+library(magrittr)
+library(SeuratData)
+library(patchwork)
+#library(batchelor)
+library(SingleCellExperiment)
+#library(scran)
+#library(scMerge)
+#library(BiocSingular)
+library(ggplot2)
+```
+
+```{r}
+# SETTIAMO LE VARIABILI CHE CI SERVONO
+
+# indica la path completa al folder vuoi vuoi salvare le immagini 
+output_path <- "E:/Review/grafici + stat/grafici/"   # ricorda di mettere "/" alla fine della path
+
+```
+
+```{r}
+# CARICA GLI OGGETTI INPUT 
+# - obj integrated
+# - file annotazione per l'oggetto4
+
+int_obj_integ_v5 <- readRDS("E:/Review/outputs/outputsint_obj_integ_v5_quarto.rds") # da modificare 
+
+# annotazione per l'oggetto4
+annotazione_obj4 <- read.csv("E:/Review/grafici + stat/GSE161947_iETX_cell_type_annotation (2).csv") # da modificare 
+
+```
+```{r}
+
+#------------------------------------------------------------ copialo all'inizio dello scritp "plots_amadei.rmd"
+# creao un dizionario con la "traduzione"
+change_names <- c(
+  "2022_Jo" = "Amadei et al. 2022 scRNA seq",
+  "JH_old_2022" = "Tarazi et al. 2022",
+  "JH_new_formatted" = "Yilmaz et al. 2025",
+  "Jo_formatted_2021" = "Amadei et al. 2021",
+  "obj5_CX_2022" = "Amadei et al. 2022 inDrop seq"
+)
+#------------------------------------------------------------ 
+```
+
+# ANNOTAZIONE 
+## Aggiunta annotazione dell'obj4 - non serve modificare
+
+```{r, annotaizone_mancante}
+# Aggiunta annoazione che mancava all'oggetto merged
+
+# creo la colonna che mi serve per aggiuungere i dati 
+colnames(annotazione_obj4)[1] <- "cells" 
+annotazione_obj4$rownames <- paste0( "Jo_formatted_2021_", annotazione_obj4$cells , "-" , annotazione_obj4$type ) # ricreo uguali a quelli dell'oggetto seurat 
+rownames(annotazione_obj4) <- annotazione_obj4$rownames
+
+
+# creo una colonna di lavoro
+int_obj_integ_v5@meta.data$tmp <- "tmp"
+
+# aggiungo nella colonna i nomi delle cellule per fare l'incorcio
+int_obj_integ_v5@meta.data$tmp[ grep( "Jo_formatted_2021_", rownames(int_obj_integ_v5@meta.data))] <- sub("[abc]$", "", rownames(int_obj_integ_v5@meta.data)[ grep( "Jo_formatted_2021_", rownames(int_obj_integ_v5@meta.data))] )
+
+# aggiungo l'annotazione dell'obj4
+int_obj_integ_v5$cell_annotation[ int_obj_integ_v5$cell_annotation == "obj4" ] <- annotazione_obj4[ int_obj_integ_v5@meta.data$tmp[ int_obj_integ_v5$cell_annotation == "obj4"], ]$annot
+
+# aggiungo anche la colonna type
+int_obj_integ_v5$type[ int_obj_integ_v5$group == "Jo_formatted_2021" ] <- annotazione_obj4[ int_obj_integ_v5@meta.data$tmp[ int_obj_integ_v5$group == "Jo_formatted_2021"], ]$type
+
+#check
+is.na(int_obj_integ_v5$cell_annotation) %>%  sum() # top non ci sono più buchi vuoti
+
+```
+
+## Macro Annotazione uniforme - non serve modificare
+
+```{r, annotazione_3_macro}
+
+# copio la cell annoation in macro annotation 
+int_obj_integ_v5$macro_annotation <- int_obj_integ_v5$cell_annotation
+
+
+# modifiche manuali per alcuni nomi ambiglui
+int_obj_integ_v5$macro_annotation[ int_obj_integ_v5$macro_annotation %in% c( "Definitive endoderm", "Allantois/ExE-Mesoderm", "ExE-Mesoderm", "ExE VE") ] <- "new_Epiblasto"
+
+
+# assegno l'etichtta VE 
+int_obj_integ_v5$macro_annotation[ grep( "Visceral|Parietal|endoderm|VE|XEN ETX|Yolk-sac|ExE VE", int_obj_integ_v5@meta.data$cell_annotation) ] <- "new_VE"
+
+# assegno l'etichetta ExE
+int_obj_integ_v5$macro_annotation[ grep( "Extra-Embryonic ectoderm|Extraembryonic ectoderm|ExE|Chorion|Endocrine|TS compartment|Ectoplacental cone", int_obj_integ_v5@meta.data$cell_annotation) ] <- "new_ExE"
+
+
+# table( int_obj_integ_v5$macro_annotation ) # controllo quello che resta, deve essere tutto epiblasto
+
+# assegno l'etichetta epiblasto
+int_obj_integ_v5$macro_annotation[! int_obj_integ_v5$macro_annotation %in% c("new_VE",  "new_ExE") ] <- "new_Epiblasto"
+
+# check 
+table( int_obj_integ_v5$macro_annotation )
+
+# prova del nove
+int_obj_integ_v5$cell_annotation[ int_obj_integ_v5$macro_annotation == "new_ExE" ] %>% table()
+int_obj_integ_v5$cell_annotation[ int_obj_integ_v5$macro_annotation == "new_VE" ] %>% table()
+int_obj_integ_v5$cell_annotation[ int_obj_integ_v5$macro_annotation == "new_Epiblasto" ] %>% table()
+```
+
+
+```{r, fig.width=8}
+
+# fig.width=8 reagola la larghezza dell'immagine plottata
+# fig.high reagola l'altezza
+
+# plot per vedere dove mappano le annotazioni di interese 
+
+# int_obj_integ_v5$cell_annotation %>% table() # questo comando mi ritorna tutte le annotazioni delle singole cellule
+
+annotazione_da_plottare <- c( "Yolk-sac/Hindgut", "Amnion", "Yolk-sac/Endothelial", "XEN ETX") # inserisci qui le cellule che vuoi vedere 
+
+
+DimPlot( subset(int_obj_integ_v5, subset = cell_annotation %in% annotazione_da_plottare ),
+         reduction = "umap",
+         group.by = "cell_annotation"  ) +
+         labs(title = "Titolo del plot") # da modificare 
+
+```
+
+```{r, fig.width=8}
+
+# plot per vedere dove mappano le cellule appartenenti ai 5 dataset
+
+# int_obj_integ_v5$group %>% table() # questo comando mi ritorna i 5 gruppi dataset 
+
+dataset_da_plottare <- c( "2022_Jo", "JH_new_formatted", "JH_old_2022","Jo_formatted_2021", "obj5_CX_2022" ) # inserisci il dataset che vuoi plottare 
+
+
+DimPlot( subset(int_obj_integ_v5, subset = group %in% dataset_da_plottare ),
+         reduction = "umap",
+         #cols = c( "#80B1D3","#FAB95B", "#9E3B3B","#B3DE69","#FB8072") , # modifica i colori 
+         group.by = c( "group", "cell_annotation", "macro_annotation")[1] ) + # cambia numero per secgliere il tipo di colorazione
+         labs(title = "Titolo del plot")
+```
+
+
+```{r, fig.width=8}
+
+# su ColorHunt ci sono vari colori 
+colors <-c( "#8DD3C7","#FFFFB3","#B7A3E3","#FB8072","#80B1D3", "#FDB462","#B3DE69", "#9E3B3B","#D9D9D9","#BC80BD","#CCEBC5","#E9B63B","#576A8F","#FBB4AE","#696FC7", "#75B06F", "#000000" )
+
+
+
+DimPlot(int_obj_integ_v5, 
+        reduction = "umap",  
+        group.by = c("macro_annotation", "seurat_clusters", "macro_annotation")[2],  # se vuoi vedere le cellule colorate per seurat_clusters metti [2]
+        cols = colors ) 
+        
+```
+
+
+```{r}
+
+# Se plottando il numero dei seurat_clusters in UMPA volete ispezionare il tipo di annotazione che hanno le cellule per cluster: 
+# esempio cluster 2 e 7 (componente Extra Endoderm)
+
+clusters <- c("2","7")
+int_obj_integ_v5$cell_annotation[ int_obj_integ_v5$seurat_clusters %in% clusters ] %>%  table()  %>%  sort()
+
+int_obj_integ_v5$macro_annotation[ int_obj_integ_v5$macro_annotation == "new_Epiblasto" ]  <- "Epiblast"
+int_obj_integ_v5$macro_annotation[ int_obj_integ_v5$macro_annotation == "new_VE" ]  <- "VE"
+int_obj_integ_v5$macro_annotation[ int_obj_integ_v5$macro_annotation == "new_ExE" ]  <- "ExE"
+```
+## Natural and Synth 
+
+```{r, separazione Nat e synth}
+
+# creo un nuovo metadato
+int_obj_integ_v5@meta.data$nat_syn <- "none"
+
+#int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$group == "2022_Jo"] <- int_obj_integ_v5$orig.ident[ int_obj_integ_v5@meta.data$group == "2022_Jo" ]
+int_obj_integ_v5@meta.data$nat_syn[  int_obj_integ_v5@meta.data$group == "2022_Jo"] <- int_obj_integ_v5$type[  int_obj_integ_v5@meta.data$group == "2022_Jo"]
+
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$group == "JH_old_2022"] <- int_obj_integ_v5$Nat_Syn[ int_obj_integ_v5@meta.data$group == "JH_old_2022" ]
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$group == "JH_new_formatted"] <- int_obj_integ_v5$type[ int_obj_integ_v5@meta.data$group == "JH_new_formatted" ]
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$group == "Jo_formatted_2021"] <- int_obj_integ_v5$type[ int_obj_integ_v5@meta.data$group == "Jo_formatted_2021" ]
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$group == "obj5_CX_2022"] <- int_obj_integ_v5$sample_resource[ int_obj_integ_v5@meta.data$group == "obj5_CX_2022" ]
+
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "synthetic" ] <- "stembryo"
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "natural" ] <- "embryo"
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "Synthetic" ] <- "stembryo"
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "Natural" ] <- "embryo"
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "NE" ] <- "embryo"
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "ETiX" ] <- "stembryo"
+
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "iETX_4" ] <- "stembryo" 
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "E6_5" ] <- "embryo"
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "E5_5" ] <- "embryo"
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "ETX_4" ] <- "stembryo"
+
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "SEM" ] <- "stembryo"
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "TFSEM" ] <- "stembryo"
+
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "ExUt" ] <- "embryo" 
+int_obj_integ_v5@meta.data$nat_syn[ int_obj_integ_v5@meta.data$nat_syn == "InUt" ] <- "embryo"
+
+
+int_obj_integ_v5@meta.data$nat_syn %>%  table()
+is.na(int_obj_integ_v5@meta.data$nat_syn) %>% sum() # nessun buco 
+table(int_obj_integ_v5$group, int_obj_integ_v5$nat_syn)
+```
+
+# PLOTS
+## Definisco i colori per dataset e i geni 
+
+
+
+```{r}
+# UMAPs espresione dei geni NAT vs Synt per dataset 
+
+genes <- c("Dnmt1", "Dnmt3a", "Dnmt3b", "Dnmt3l", "Uhrf1" )
+
+
+# per chiarezza visiva associo un colore fisso ad un database (modificabile):
+color_dict <- c(
+  "2022_Jo" = "#8F0177",
+  "JH_old_2022" = "#FDB462",
+  "JH_new_formatted" = "#31694E",
+  "Jo_formatted_2021" = "#9E3B3B",
+  "obj5_CX_2022" = "#4A70A9"
+)
+```
+
+## UMAPs - espressione geni per dataset 
+### v1 - ciclo sui geni e datset 
+
+```{r, fig.width=10}
+
+dataset_da_plottare <- c( "2022_Jo", "JH_old_2022", "JH_new_formatted", "Jo_formatted_2021", "obj5_CX_2022")[3]   # selezione i dataset che vuoi plottare
+
+save <- FALSE # da cambiare se vuoi salvare le png che genera
+
+
+for ( gene in genes ){ # ciclo sui geni 
+  
+  for ( dataset in dataset_da_plottare){ # ciclo sui dataset, se si selezionano tutti e 5 dataset la funzione ci metterà qualche minuto
+  
+    
+      plot <- FeaturePlot( subset(int_obj_integ_v5, subset = group %in% dataset ),
+                   features = gene,
+                   cols = c( "lightgrey",  color_dict[dataset]), 
+                   reduction = "umap",
+                   # pt.size = 1 # modifica la dimensione dei punti 
+                   split.by = "nat_syn", order = T ) +
+                   theme(legend.position = "right")  # per aggiungere la legenda, commentare o rimuovere se non serve 
+      print(plot)
+      
+      
+      if(save){  #  solo se TRUE salva le immagini 
+        
+        name_png <- paste0( output_path, "FeatPlot_", gene, "_", dataset, ".png" ) # aciclo mette lui il nome dall'immagine 
+        
+        ggsave(plot, filename = name_png, width = 10, # da modificare 
+                                          height = 8)  # da modificare 
+        }
+    
+  } 
+}
+
+```
+
+### v2 - semplice plot singolo
+
+```{r, fig.width=10}
+
+single_plot <- FeaturePlot( subset(int_obj_integ_v5, subset = group %in% c("JH_new_formatted")  ),
+                  features = "Dnmt3l",
+                  cols = c( "lightgrey", "#5A0E24" ), 
+                  reduction = "umap",
+                  split.by = "nat_syn", order = T) +
+                  theme(legend.position = "right")  # per aggiungere la legenda, commentare o rimuovere se non serve 
+
+
+if(FALSE){ # TRUE se si vuole salvare l'immagine
+    
+  ggsave(single_plot, filename = paste0( output_path, "FeatPlot_", "gene", "_", "dataset", ".png" ), # sostituisci gene e datatset con i nomi corretti fra virgolette
+          width = 10, # da modificare 
+          height = 6)  # da modificare 
+  
+}
+```
+
+
+## Dotplots - espressione geni per dataset - CORRETTO
+### v1 - ciclo sui dataset - corretto
+
+```{r, fig.height=}
+
+save <- TRUE # da cambiare se vuoi salvare le png che genera
+
+dataset_da_plottare <- c( "2022_Jo", "JH_old_2022", "JH_new_formatted", "Jo_formatted_2021", "obj5_CX_2022")   # selezione i dataset che vuoi plottare
+
+
+
+# aggiungo del metadato CORRETTO
+int_obj_integ_v5$macro_annotation_nat_syn <- paste(int_obj_integ_v5$macro_annotation, int_obj_integ_v5$nat_syn, sep = "_")
+
+
+for ( dataset in dataset_da_plottare){ # ciclo sui dataset
+       dotplot <- DotPlot(
+                object = subset(int_obj_integ_v5, subset = group == dataset ),
+                features = genes,
+                cols = c("lightgrey", color_dict[dataset]), # colore in base al dataset 
+                col.min = -2.5,
+                col.max = 2.5,
+                dot.min = 0,
+                dot.scale = 6,
+                group.by = "macro_annotation_nat_syn",
+                #split.by = "nat_syn", # genera il bug dei colori: da togliere
+                cluster.idents = FALSE,
+                scale = TRUE,
+                scale.by = "radius",
+                scale.min = NA,
+                scale.max = NA
+              ) + 
+                coord_flip() + # da rimuovere per invertire asse y e x 
+                theme(
+                  axis.text.x = element_text(angle = 45, hjust = 1)
+                )  + 
+              labs(title = paste0( "Dotplot dataset: ", change_names[ dataset] ),  # <---- qui aggiungi  change_names[dataset]
+                     size = "Percent Expressed"                                      # <---- fissa il titolo 
+                     ) +                                                             # <----
+                    guides(                                                          # <----
+                      size = guide_legend(order = 1)                                 # <---- definisce l'ordine per la legenda 
+                    )
+       
+          print(dotplot)
+ 
+  
+ 
+      if(save){  #  solo se TRUE salva le immagini 
+        
+        name_png <- paste0( output_path, "DotPlot_", dataset, ".png" ) # aciclo mette lui il nome dall'immagine 
+        
+        ggsave(dotplot, filename = name_png, bg = "white",
+                                             width = 7, # da modificare
+                                             height = 6)  # da modificare 
+        
+        }
+   
+} 
+
+```
+
+### v2 - semplice plot singolo - corretto
+
+```{r, fig.width=8}
+
+
+dataset <- c( "2022_Jo", "JH_old_2022", "JH_new_formatted", "Jo_formatted_2021", "obj5_CX_2022")[3] # da scegliere qui con il nuemro 
+
+
+single_dot_plot <- DotPlot(object = subset(int_obj_integ_v5, subset = group == dataset ),
+                           features = genes,
+                           cols = c("lightgrey", color_dict[dataset]), # colore in base al dataset 
+                           col.min = -2.5,
+                           col.max = 2.5,
+                           dot.min = 0,
+                           dot.scale = 6,
+                           group.by = "macro_annotation_nat_syn",
+                           #split.by = "nat_syn", # ha un bug: da togliere 
+                           cluster.idents = FALSE,
+                           scale = TRUE,
+                           scale.by = "radius",
+                           scale.min = NA,
+                           scale.max = NA
+                            ) + 
+                              coord_flip() + # da rimuovere per invertire asse y e x 
+                              theme(
+                                    axis.text.x = element_text(angle = 45, hjust = 1)
+                                  )  + 
+                              labs(title = paste0( "Dotplot dataset: " , dataset))
+            
+                   
+print(single_dot_plot)
+ 
+      
+          
+# per salvare un'immagine è necessario indirizzarla in un oggetto "plot <- FeaturePLot( .. )" e poi salvarla con la funzione sotto:
+          
+if(FALSE){  #  solo se TRUE salva le immagini 
+        
+        name_png <- paste0( output_path, "DotPlot_", dataset, ".png" ) 
+        
+        ggsave(single_dot_plot, filename = name_png, bg = "white",
+                                             width = 7, # da modificare
+                                             height = 6)  # da modificare 
+        
+ }
+
+```
+
+### v3 - Dotplot tutti assieme
+
+```{r}
+
+
+dotplot_all_datasets  <- DotPlot(  object = int_obj_integ_v5,
+                                   features = genes,
+                                   cols = c("lightgrey", "#8C00FF"), # colore in base al dataset 
+                                   col.min = -2.5,
+                                   col.max = 2.5,
+                                   dot.min = 0,
+                                   dot.scale = 6,
+                                   group.by = "macro_annotation_nat_syn",
+                                   #split.by = "nat_syn",
+                                   cluster.idents = FALSE,
+                                   scale = TRUE,
+                                   scale.by = "radius",
+                                   scale.min = NA,
+                                   scale.max = NA
+                                    ) + 
+                                      coord_flip() + # da rimuovere per invertire asse y e x 
+                                      theme(
+                                            axis.text.x = element_text(angle = 45, hjust = 1)
+                                          )  + 
+                                      labs(title = paste0( "Dotplot dataset: " , "tutti assieme"))
+                    
+                         
+print(dotplot_all_datasets)
+ 
+
+```
+
+# Separazione time point 
+## - aggiunta del metadato 
+
+```{r}
+
+# aggiunta colonna mettado che raccoglie i le info nei time point 
+
+dataset_time_point <- c( "2022_Jo", "obj5_CX_2022", "Jo_formatted_2021")  # tengo solo i dataset divisibili per time point # <----- qui ho messo il dataset in terza posizione
+
+
+# creo il metadato t_point 
+int_obj_integ_v5@meta.data$t_point <- NULL 
+int_obj_integ_v5@meta.data$t_point[ int_obj_integ_v5$group %in% dataset_time_point[1]] <- int_obj_integ_v5@meta.data$timepoint[ int_obj_integ_v5$group %in% dataset_time_point[1]] %>% sub("-$", "", .)
+int_obj_integ_v5@meta.data$t_point[ int_obj_integ_v5$group %in% dataset_time_point[2]] <- int_obj_integ_v5@meta.data$stage[ int_obj_integ_v5$group %in% dataset_time_point[2]]
+
+# aggiungo l'annotazione type in t_point per il tataser n3 nella lista "dataset_time_point" quindi "Jo_formatted_2021"
+int_obj_integ_v5@meta.data$t_point[ int_obj_integ_v5$group %in% dataset_time_point[3]] <- int_obj_integ_v5@meta.data$type[ int_obj_integ_v5$group %in% dataset_time_point[3]]  # <--- qui
+
+
+# definisco un dizionario che mi accoppi i confornti
+
+tpoint_dict <- list( "2022_Jo" = list( '1' = c("N_E65", "S_ietx5"),
+                                       '2' = c("N_E75", "S_ietx6"),
+                                       '3' = c("N_E85", "S_ietx8")),
+                  
+                  "obj5_CX_2022" =  list('1' = c("Day6", "E7.5"),
+                                         '2' = c("Day8","E8.5","E8.75")),  # escludiamo E9.5
+                  "Jo_formatted_2021"= list ('1' = c("E5_5", "iETX_4" )))
+
+
+```
+
+## - generazione dei dotplot 
+
+```{r, fig.height=}
+
+
+save <- TRUE # da cambiare se vuoi salvare le png che genera
+
+# ho commentato la linea sotto perchè dovrebbe essere già salvato nel metadato
+# int_obj_integ_v5$macro_annotation_nat_syn <- paste(int_obj_integ_v5$macro_annotation, int_obj_integ_v5$nat_syn, sep = "_")
+
+
+for ( dataset in dataset_time_point ){ # ciclo sui dataset
+  
+  for ( i in 1:length(tpoint_dict[[dataset]]) ){ # ciclo sul nuemro di time point da confrontare
+  
+       dotplot <- DotPlot(
+                object = subset(int_obj_integ_v5, subset = group == dataset & t_point %in% tpoint_dict[[dataset]][[i]]),
+                features = genes,
+                cols = c("lightgrey", color_dict[dataset]), # colore in base al dataset 
+                col.min = -2.5,
+                col.max = 2.5,
+                dot.min = 0,
+                dot.scale = 6,
+                group.by = "macro_annotation_nat_syn",
+                #split.by = "nat_syn", # genera il bug dei colori: da togliere
+                cluster.idents = FALSE,
+                scale = TRUE,
+                scale.by = "radius",
+                scale.min = NA,
+                scale.max = NA
+              ) + 
+                coord_flip() + # da rimuovere per invertire asse y e x 
+                theme(
+                  axis.text.x = element_text(angle = 45, hjust = 1)
+                )  + 
+              labs(title = paste0( "Dotplot dataset: ",  change_names[ dataset]), 
+                  # subtitle = paste0( paste( tpoint_dict[[dataset]][[i]], collapse = "-" ) ), # se volete togliere il sottotitolo commentate questa riga 
+                     size = "Percent Expressed"                                      
+                     ) +                                                            
+                    guides(                                                         
+                      size = guide_legend(order = 1)                                
+                    )
+       
+          print(dotplot)
+          
+
+      if(save){  #  solo se TRUE salva le immagini 
+        
+        name_png <- paste0( output_path, "DotPlot_", dataset, "_",
+                            paste( tpoint_dict[[dataset]][[i]], collapse = "-" ), ".png" ) # a ciclo mette lui il nome dall'immagine 
+        
+        ggsave(dotplot, filename = name_png, bg = "white",
+                                             width = 7, # da modificare
+                                             height = 6)  # da modificare 
+        
+        }
+   
+      } 
+} 
+
+```
+
+
+
+# Violin plot - da scartare
+
+```{r, fig.height=4, fig.width=5}
+
+# a ciclo genera violin plots splitted per ongi gene
+
+if(FALSE){   # non fa correre questo pezzo 
+
+for(i in genes){ 
+
+    # VERSIONE 1
+    VlnPlot(
+      object = int_obj_integ_v5_sc, # oggetto single cells 
+      features = i,
+      group.by = "macro_annotation",
+      split.by = "nat_syn",
+      pt.size = 0,
+      cols = c("#8DD3C7", "#B7A3E3" ),
+      split.plot = TRUE
+    ) %>%  plot()
+}
+
+
+for(i in genes){ 
+  
+    # VERSIONE 2
+    VlnPlot(
+      object = int_obj_integ_v5_sc, # oggetto single cells 
+      features = i,
+      group.by = "macro_annotation",
+      split.by = "nat_syn",
+      pt.size = 0,
+      ncol = 1, 
+      cols = c("#8DD3C7", "#B7A3E3" )
+    ) %>%  plot()
+}
+
+  
+
+for(i in genes){ 
+
+VlnPlot(
+  object = int_obj_integ_v5_sn, # oggetto single nuceli 
+  features = i,
+  group.by = "macro_annotation",
+  split.by = "nat_syn",
+  pt.size = 0,
+  ncol = 1, 
+  cols = c("#FDB462", "#9E3B3B" )
+) %>%  plot()
+}
+  
+}
+
+```
+```{r}
+
+# pezzo da inserie alla fine dello scirtp "plots_amadei.rmd" così salvi l'oggetto
+
+saveRDS( int_obj_integ_v5, paste0("E:/Review/grafici + stat/", "main_obj.Rds" ) ) # devi aggiungere path di dove lo vuoi salvare
+
+
+# quando lo ricarichi puoi assegnare all'oggetto qualisasi nome, per comodità assegna "int_obj_integ_v5" così non devi cambiare nulla negli script
+#int_obj_integ_v5 <- readRDS( paste0( output_path, "main_obj.Rds" ))
+
+```
+```{r}
+sink("sessionInfo.txt")
+sessionInfo()
+sink()
+```
